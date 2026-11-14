@@ -1,0 +1,4 @@
+# Out-of-tree modules for the Waveshare RPI-HMI-7A DSI panel on Venus OS 5.10.110
+obj-m += waveshare-panel-regulator.o
+obj-m += panel-waveshare-dsi-v2.o
+obj-m += goodix.o

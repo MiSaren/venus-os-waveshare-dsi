@@ -1,0 +1,17 @@
+# kernel tree prepared by scripts/prepare-kernel.sh (~1.4 GB)
+/kernel-src/
+# build output
+/dist/
+/driver/out/
+/driver/*.o
+/driver/*.ko
+/driver/*.mod
+/driver/*.mod.c
+/driver/.*.cmd
+/driver/Module.symvers
+/driver/modules.order
+/driver/.tmp_versions/
+*.pp.dts
+# local notes, device logs (contain MAC/IP addresses)
+/private/
+/fbrotate/fbrotate

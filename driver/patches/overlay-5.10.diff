@@ -1,0 +1,27 @@
+--- a/arch/arm/boot/dts/overlays/vc4-kms-dsi-waveshare-panel-v2-overlay.dts	(raspberrypi/linux rpi-6.18.y @ ea17ae02ca28)
++++ b/driver/dts/vc4-kms-dsi-waveshare-panel-v2-overlay.dts
+@@ -1,5 +1,15 @@
+ /*
+  * vc4-kms-dsi-waveshare-panel-v2-overlay.dts
++ *
++ * Source: raspberrypi/linux rpi-6.18.y arch/arm/boot/dts/overlays.
++ * 5.10 backport for Venus OS (Raspberry Pi 4, bcm2711-rpi-4-b.dtb of
++ * kernel 5.10.110): the "dsi0" override was removed, because it refers to the
++ * label i2c_csi_dsi0 which does not exist in the 5.10 base device tree; an
++ * unresolved fixup makes the firmware reject the whole overlay. The Pi 4B only
++ * has the DSI1 connector anyway.
++ *
++ * Usage (config.txt), together with dtoverlay=vc4-kms-v3d-pi4:
++ *   dtoverlay=vc4-kms-dsi-waveshare-panel-v2,7_0_inch_a
+  */
+ 
+ /dts-v1/;
+@@ -114,7 +124,6 @@
+ 		invx = <&touch>,"touchscreen-inverted-x?";
+ 		invy = <&touch>,"touchscreen-inverted-y?";
+ 		swapxy = <&touch>,"touchscreen-swapped-x-y?";
+-		dsi0 = <&dsi_frag>, "target:0=",<&dsi0>,
+-			   <&i2c_frag>, "target:0=",<&i2c_csi_dsi0>;
++		/* 5.10 backport: "dsi0" override removed (no i2c_csi_dsi0 label) */
+ 	};
+ };

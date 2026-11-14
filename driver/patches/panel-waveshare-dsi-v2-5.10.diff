@@ -1,0 +1,69 @@
+--- a/drivers/gpu/drm/panel/panel-waveshare-dsi-v2.c	(raspberrypi/linux rpi-6.18.y @ ea17ae02ca28)
++++ b/driver/panel-waveshare-dsi-v2.c
+@@ -1,5 +1,10 @@
+ // SPDX-License-Identifier: GPL-2.0
+ /*
++ * Source: raspberrypi/linux rpi-6.18.y *
++ * Backported to the Venus OS Raspberry Pi kernel 5.10.110 (victronenergy/linux
++ * 3859262). Changes are marked "5.10 backport".
++ */
++/*
+  * Copyright (C) 2024 Waveshare International Limited
+  *
+  * Based on panel-raspberrypi-touchscreen by Broadcom
+@@ -12,6 +17,7 @@
+ #include <linux/kernel.h>
+ #include <linux/module.h>
+ #include <linux/of.h>
++#include <linux/of_device.h> /* 5.10 backport: of_device_get_match_data */
+ 
+ #include <linux/gpio/consumer.h>
+ #include <linux/regulator/consumer.h>
+@@ -2268,19 +2274,10 @@
+ 	return 1;
+ }
+ 
+-static enum drm_panel_orientation
+-ws_panel_get_orientation(struct drm_panel *panel)
+-{
+-	struct ws_panel *ctx = panel_to_ws(panel);
+-
+-	return ctx->orientation;
+-}
+-
+ static const struct drm_panel_funcs ws_panel_funcs = {
+ 	.prepare = ws_panel_prepare,
+ 	.unprepare = ws_panel_unprepare,
+ 	.get_modes = ws_panel_get_modes,
+-	.get_orientation = ws_panel_get_orientation,
+ };
+ 
+ static int ws_panel_dsi_probe(struct mipi_dsi_device *dsi)
+@@ -2298,7 +2295,7 @@
+ 	ctx->dsi = dsi;
+ 	ctx->desc = of_device_get_match_data(&dsi->dev);
+ 
+-	ctx->panel.prepare_prev_first = true;
++	/* 5.10 backport: no prepare_prev_first; vc4_dsi enables the host before pre_enable */
+ 	drm_panel_init(&ctx->panel, &dsi->dev, &ws_panel_funcs,
+ 		       DRM_MODE_CONNECTOR_DSI);
+ 
+@@ -2342,7 +2339,8 @@
+ 	return ret;
+ }
+ 
+-static void ws_panel_dsi_remove(struct mipi_dsi_device *dsi)
++/* 5.10 backport: mipi_dsi_driver.remove returns int */
++static int ws_panel_dsi_remove(struct mipi_dsi_device *dsi)
+ {
+ 	struct ws_panel *ctx = mipi_dsi_get_drvdata(dsi);
+ 
+@@ -2362,6 +2360,8 @@
+ 		gpiod_set_value_cansleep(ctx->iovcc, 0);
+ 		msleep(20);
+ 	}
++
++	return 0;
+ }
+ 
+ static void ws_panel_dsi_shutdown(struct mipi_dsi_device *dsi)

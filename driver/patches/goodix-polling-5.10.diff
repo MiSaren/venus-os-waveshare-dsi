@@ -1,0 +1,108 @@
+--- a/drivers/input/touchscreen/goodix.c	(victronenergy/linux @ 3859262)
++++ b/driver/goodix.c
+@@ -1,5 +1,11 @@
+ // SPDX-License-Identifier: GPL-2.0-only
+ /*
++ * Source: victronenergy/linux 5.10.110 (3859262) + polling mode ported from
++ * raspberrypi/linux rpi-6.18.y *
++ * Built to the Venus OS Raspberry Pi kernel 5.10.110 (victronenergy/linux
++ * 3859262). Changes are marked "5.10 backport".
++ */
++/*
+  *  Driver for Goodix Touchscreens
+  *
+  *  Copyright (c) 2014 Red Hat Inc.
+@@ -51,6 +57,7 @@
+ #define GOODIX_CMD_SCREEN_OFF		0x05
+ 
+ #define GOODIX_READ_COOR_ADDR		0x814E
++#define GOODIX_POLL_INTERVAL_MS		17	/* 5.10 backport: polling, 17ms = 60fps */
+ #define GOODIX_GT1X_REG_CONFIG_DATA	0x8050
+ #define GOODIX_GT9X_REG_CONFIG_DATA	0x8047
+ #define GOODIX_REG_ID			0x8140
+@@ -334,6 +341,14 @@
+ 			return touch_num;
+ 		}
+ 
++		if (!ts->client->irq)
++			/*
++			 * 5.10 backport: no point in retrying if polling, as
++			 * some versions continuously report "not ready" if
++			 * there are no touch points.
++			 */
++			break;
++
+ 		usleep_range(1000, 2000); /* Poll every 1 - 2 ms */
+ 	} while (time_before(jiffies, max_timeout));
+ 
+@@ -443,13 +458,28 @@
+ 	return IRQ_HANDLED;
+ }
+ 
++/* 5.10 backport: polling mode when no IRQ is given */
++static void goodix_ts_work_i2c_poll(struct input_dev *input)
++{
++	struct goodix_ts_data *ts = input_get_drvdata(input);
++
++	goodix_process_events(ts);
++
++	if (goodix_i2c_write_u8(ts->client, GOODIX_READ_COOR_ADDR, 0) < 0)
++		dev_err(&ts->client->dev, "I2C write end_cmd error\n");
++}
++
+ static void goodix_free_irq(struct goodix_ts_data *ts)
+ {
+-	devm_free_irq(&ts->client->dev, ts->client->irq, ts);
++	if (ts->client->irq)
++		devm_free_irq(&ts->client->dev, ts->client->irq, ts);
+ }
+ 
+ static int goodix_request_irq(struct goodix_ts_data *ts)
+ {
++	if (!ts->client->irq)
++		return 0;
++
+ 	return devm_request_threaded_irq(&ts->client->dev, ts->client->irq,
+ 					 NULL, goodix_ts_irq_handler,
+ 					 ts->irq_flags, ts->client->name, ts);
+@@ -1098,6 +1128,20 @@
+ 		return error;
+ 	}
+ 
++	input_set_drvdata(ts->input_dev, ts);
++
++	if (!ts->client->irq) { /* 5.10 backport: polling mode */
++		error = input_setup_polling(ts->input_dev, goodix_ts_work_i2c_poll);
++		if (error) {
++			dev_err(&ts->client->dev,
++				"could not set up polling mode, %d\n", error);
++			return error;
++		}
++		input_set_poll_interval(ts->input_dev, GOODIX_POLL_INTERVAL_MS);
++		dev_info(&ts->client->dev, "no IRQ, polling every %d ms\n",
++			 GOODIX_POLL_INTERVAL_MS);
++	}
++
+ 	error = input_register_device(ts->input_dev);
+ 	if (error) {
+ 		dev_err(&ts->client->dev,
+@@ -1277,7 +1321,8 @@
+ 
+ 	/* We need gpio pins to suspend/resume */
+ 	if (ts->irq_pin_access_method == IRQ_PIN_ACCESS_NONE) {
+-		disable_irq(client->irq);
++		if (client->irq) /* 5.10 backport: no IRQ when polling */
++			disable_irq(client->irq);
+ 		return 0;
+ 	}
+ 
+@@ -1319,7 +1364,8 @@
+ 	int error;
+ 
+ 	if (ts->irq_pin_access_method == IRQ_PIN_ACCESS_NONE) {
+-		enable_irq(client->irq);
++		if (client->irq) /* 5.10 backport: no IRQ when polling */
++			enable_irq(client->irq);
+ 		return 0;
+ 	}
+ 
