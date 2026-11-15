@@ -11,6 +11,8 @@ Files
   gui-v2-keep.sh                 optional: installs the new UI (gui-v2) from the feed
   fbrotate                       mirrors gui-v2's 1280x720 framebuffer (vfb, /dev/fb1)
                                  onto the 720x1280 panel, rotated
+  gui-v2-qml.patch               gui-v2 QML fix, puts the on-screen keyboard at the
+                                 bottom of the (scaled) UI on the 1280x720 screen
   panel                          optional: overlay parameters (default 7_0_inch_a)
   gui-v2.enabled                 optional: keep gui-v2 on the local display
   rotation                       optional: "ccw" turns the gui-v2 picture by 180 degrees
@@ -29,7 +31,11 @@ it from the Victron feed in the background once the network is up; until then
 the classic UI is shown. Disable: rm /data/waveshare-display/gui-v2.enabled
 gui-v2 closes its dialogs when it has to rotate itself, so with gui-v2 the
 script gives it a landscape virtual framebuffer (vfb) that the fbrotate service
-copies onto the panel, and Qt rotates the touch input.
+copies onto the panel, and Qt rotates the touch input. gui-v2 scales its
+1024x600 layout to the 1280x720 screen, but places the on-screen keyboard as if
+the screen were 1024x600, so the keyboard hung off the left edge; the script
+patches ramdisk copies of two gui-v2 QML files (gui-v2-qml.patch) and
+bind-mounts them over the originals.
 
 Log:        /data/log/waveshare-display.log
 Disable:    remove the waveshare-display.sh line from /data/rcS.local

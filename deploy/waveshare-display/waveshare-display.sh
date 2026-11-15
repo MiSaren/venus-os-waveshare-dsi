@@ -14,7 +14,8 @@
 #  4. waits for /dev/fb0, so that the GUI starts on the panel (linuxfb)
 #  5. exposes the backlight to Venus (brightness setting, display-off timer)
 #  6. with gui-v2: a landscape virtual framebuffer mirrored onto the panel
-#     (fbrotate), so that gui-v2 need not rotate itself and its dialogs work
+#     (fbrotate), so that gui-v2 need not rotate itself and its dialogs work,
+#     and patched QML (gui-v2-qml.patch) so that the on-screen keyboard fits
 #  7. if gui-v2.enabled exists and gui-v2 is missing (e.g. after a firmware
 #     update), starts its installation in the background (gui-v2-keep.sh)
 #
@@ -155,15 +156,41 @@ if [ -d /service/gui-v2 ] && [ ! -f "$DIR/no-landscape-fb" ]; then
 		ln -s /run/overlays/fbrotate /service/fbrotate	# picked up by svscan
 		log "fbrotate service started"
 	fi
+	restart_gui_v2=0
 	if [ -e /dev/fb1 ] && ! grep -q 'fb=/dev/fb1' /service/gui-v2/run; then
 		sed -i "s|^\(\. /etc/profile.d/qt6.sh\) && exec |\1 \&\& export QT_QPA_PLATFORM=linuxfb:fb=/dev/fb1:mmsize=154x85 QT_QPA_EVDEV_TOUCHSCREEN_PARAMETERS=rotate=$touch_rot \&\& exec |" /service/gui-v2/run
 		if grep -q 'fb=/dev/fb1' /service/gui-v2/run; then
 			log "gui-v2 moved to the landscape framebuffer"
-			[ -n "$(pidof venus-gui-v2)" ] && svc -t /service/gui-v2
+			restart_gui_v2=1
 		else
 			log "gui-v2 run script not recognised, it keeps rotating itself"
 		fi
 	fi
+	# The 1280x720 window is wider than gui-v2's 1024x600 layout, which Main.qml
+	# centres and scales; the virtual keyboard assumes window == layout and hangs
+	# off the left edge. gui-v2 loads its QML from the filesystem, so patch ramdisk
+	# copies (gui-v2-qml.patch) and bind-mount them over the installed files.
+	qml=/opt/victronenergy/gui-v2/Victron/VenusOS
+	fix=/run/overlays/gui-v2-qml
+	if [ -e /dev/fb1 ] && [ -f "$DIR/gui-v2-qml.patch" ] && [ -d "$qml" ] && ! grep -q " $qml/" /proc/mounts; then
+		files=$(sed -n 's|^+++ b/\([^[:space:]]*\).*|\1|p' "$DIR/gui-v2-qml.patch")
+		rm -rf "$fix"
+		ok=1
+		for f in $files; do
+			mkdir -p "$fix/$(dirname "$f")" && cp "$qml/$f" "$fix/$f" || ok=0
+		done
+		if [ "$ok" = 1 ] && out=$(cd "$fix" && patch -p1 -i "$DIR/gui-v2-qml.patch" 2>&1); then
+			for f in $files; do
+				mount --bind "$fix/$f" "$qml/$f" || log "bind mount of $f FAILED"
+			done
+			log "gui-v2 QML patched (keyboard placement): $(echo $files)"
+			restart_gui_v2=1
+		else
+			log "gui-v2-qml.patch does not fit this gui-v2 version, QML left unchanged: $(echo $out)"
+			rm -rf "$fix"
+		fi
+	fi
+	[ "$restart_gui_v2" = 1 ] && [ -n "$(pidof venus-gui-v2)" ] && svc -t /service/gui-v2
 fi
 
 # 7. New UI (gui-v2): not in the Raspberry Pi image and removed by firmware

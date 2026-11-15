@@ -1,0 +1,59 @@
+gui-v2: place the virtual keyboard at the bottom of the UI on screens whose
+aspect ratio differs from the UI layout (here 1280x720 vs 1024x600).
+
+Main.qml centres the 1024x600 UI in the 1280x720 window and scales the window
+content by 1.2. The keyboard (InputPanel, in the window overlay) is positioned
+as if the window were exactly the UI size, so it ended up 154 px past the left
+edge of the screen and 72 px above the bottom. ModalDialog moves a dialog above
+the keyboard using the keyboard rectangle in window coordinates, which left the
+focused field partly under the keyboard. Both changes are no-ops when the
+window has the UI's size (Victron's own displays).
+
+Applied at boot by waveshare-display.sh to ramdisk copies of the installed
+files, which are then bind-mounted over the originals (the rootfs is not
+modified). Made against gui-v2 v1.3.22; if it does not apply to another
+version, the files are left alone.
+
+--- a/components/dialogs/ModalDialog.qml
++++ b/components/dialogs/ModalDialog.qml
+@@ -350,9 +350,12 @@
+ 		states: State {
+ 			name: "focused"
+ 
++			// The keyboard rectangle is in window coordinates; map it to the dialog's parent,
++			// which differs when Main.qml centres and scales the UI in a larger window.
+ 			PropertyChanges {
+ 				root.y: Math.min(root.defaultY,
+-						Theme.visualViewportBottom
++						(root.parent ? root.parent.mapFromItem(null, 0, Theme.visualViewportBottom).y
++							: Theme.visualViewportBottom)
+ 							- dialogStateGroup.initialFocusedItemY
+ 							- root.focusedInputItem.height
+ 							- Theme.geometry_inputPanel_topMargin)
+--- a/components/InputPanel.qml
++++ b/components/InputPanel.qml
+@@ -30,14 +30,21 @@
+ 
+ 	readonly property bool requiresRotation: Global.main && Global.main.requiresRotation
+ 
++	// Main.qml centres the UI (Theme.geometry_screen_width x height) in the window and
++	// scales the window content to fit. When the screen does not have the UI's aspect ratio
++	// (e.g. 1280x720 vs 1024x600), the window is larger than the UI, so align the panel with
++	// the bottom of the UI instead of the top-left corner of the window overlay.
++	readonly property real uiLeft: Global.main ? (Global.main.width - Theme.geometry_screen_width) / 2 : 0
++	readonly property real uiBottom: Global.main ? (Global.main.height + Theme.geometry_screen_height) / 2 : Theme.geometry_screen_height
++
+ 	visible: Qt.inputMethod.visible || yAnimator.running
+ 
+ 	y: requiresRotation ? 312 // manually-found coordinate transform for rpi5, see #2702
+-	 : Qt.inputMethod.visible ? Theme.geometry_screen_height - root.height
+-	 : Theme.geometry_screen_height
++	 : Qt.inputMethod.visible ? root.uiBottom - root.height
++	 : root.uiBottom
+ 
+ 	x: requiresRotation ? 480 // manually-found coordinate transform for rpi5, see #2702
+-	 : 0
++	 : root.uiLeft
+ 
+ 	transformOrigin: Item.Center
+ 	transform: Rotation {

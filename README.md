@@ -58,6 +58,7 @@ What is untested:
 | `deploy/install.sh`, `deploy/uninstall.sh` | Installer and uninstaller that run on the GX device |
 | `deploy/waveshare-display/waveshare-display.sh` | Boot script, run from `/data/rcS.local` |
 | `deploy/waveshare-display/gui-v2-keep.sh` | Optional: installs gui-v2 again after firmware updates |
+| `deploy/waveshare-display/gui-v2-qml.patch` | gui-v2 QML fix: puts the on-screen keyboard at the bottom of the UI on the 1280×720 screen |
 | `fbrotate/fbrotate.c` | Copies a 1280×720 virtual framebuffer onto the 720×1280 panel, rotated (used with gui-v2) |
 
 ## Installation
@@ -139,7 +140,7 @@ device. Things that matter for a loadable module:
    3. loads the panel MCU driver and the panel driver with `insmod` from `/data`;
    4. waits for vc4 to bind through deferred probe. `/dev/fb0` (`vc4drmfb`, 720×1280) appears in about 1 s;
    5. mirrors `/etc/venus` to a ramdisk, adds `backlight_device` and `blank_display_device`, and bind-mounts the copy over `/etc/venus`. Venus does the same for `/service`. These are the same files Victron uses for the GX Touch. `venus-platform` then offers the brightness setting, and the GUI blanks the display through `bl_power`.
-4. **gui-v2 only.** The script loads `vfb`, which gives a 1280×720 `/dev/fb1`, and starts the supervised `fbrotate` service. It also points gui-v2 at `/dev/fb1`, with Qt rotating the touch input. See the gui-v2 section for why.
+4. **gui-v2 only.** The script loads `vfb`, which gives a 1280×720 `/dev/fb1`, and starts the supervised `fbrotate` service. It also points gui-v2 at `/dev/fb1`, with Qt rotating the touch input, and bind-mounts two patched QML files so that the on-screen keyboard fits. See the gui-v2 section for why.
 5. **GUI.** The GUI starts on `linuxfb`. gui-v1 draws on the panel and rotates its landscape layout itself. gui-v2 sees a landscape screen and does not need to rotate.
 
 Apart from the optional gui-v2 below, the rootfs is never written. The Pi's
@@ -193,6 +194,31 @@ Measured on the Pi 4: `fbrotate` uses about 2 % of one core with the screen on
 and idle, 0 % with the screen off, and around 10 % while the UI animates.
 Create `/data/waveshare-display/no-landscape-fb` to disable this, so that gui-v2
 rotates itself again.
+
+### On-screen keyboard
+
+gui-v2 has two fixed layouts, 1024×600 and 800×480, and picks one from the
+screen's physical size. Main.qml centres the layout in the window and scales it
+to fit, so on 1280×720 the 1024×600 UI is drawn 1.2 times larger, with a
+narrow black margin left and right. The on-screen keyboard is not part of the
+scaled UI: it lives in the window overlay and is placed as if the window had
+exactly the layout's size. On this screen it therefore hung about 150 px past
+the left edge and stopped about 70 px above the bottom. Victron's own displays
+have the layout's size, so they are not affected.
+
+gui-v2 loads its QML files from `/opt/victronenergy/gui-v2/Victron/` (so that
+they can be customised on the device). At boot the script copies two of them to
+a ramdisk, applies `gui-v2-qml.patch` and bind-mounts the copies over the
+originals:
+
+- `InputPanel.qml` puts the keyboard at the bottom of the UI area.
+- `ModalDialog.qml` converts the keyboard position from window coordinates to the
+  dialog's coordinates. It uses that position to move a dialog with a focused text
+  field above the keyboard.
+
+On a window with the layout's size both changes do nothing. The patch was made
+against gui-v2 v1.3.22. If it does not apply to a later version, the script
+logs that and leaves the files unchanged.
 
 To switch back to the classic UI:
 
