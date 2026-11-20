@@ -217,6 +217,14 @@ pipeline is powered down as well:
   off" / "sleep in" commands that the upstream `unprepare` sends then time out
   intermittently (`vc4_dsi: transfer interrupt wait timeout`, 1 s, host reset).
   They are not needed because the supplies are cut right after.
+- Powering up occasionally fails to initialise the panel (about 1 in 5 to 1 in 10
+  power-ups on the test unit): the first DCS command of the init sequence times out
+  (`vc4_dsi: transfer interrupt wait timeout`, `instat: 0x00000000`, then
+  `waveshare-dsi: failed to init panel: -110`), and the backlight comes on over a panel
+  that shows nothing. 5.10 ignores the result of the panel's `prepare`, so `fbrotate`
+  reads the kernel log (`/dev/kmsg`) after each power-up and, if the panel driver
+  logged that failure, powers the pipeline down and up again (up to 6 attempts, about
+  2 s each). A power-down and power-up always recovered it in testing.
 - When `fbrotate` stops or is restarted while the panel is powered down, it powers the
   panel up again and puts `bl_power` back to blanked, so the backlight does not stay on
   for a GUI that believes the display is off. After a crash the next instance carries on

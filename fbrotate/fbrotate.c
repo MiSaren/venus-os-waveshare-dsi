@@ -28,7 +28,8 @@
  *                    scanout and the panel's own supplies, not only its
  *                    backlight); it is powered up again when the display is on,
  *                    and when fbrotate exits (with the backlight left off if the
- *                    display was blanked).
+ *                    display was blanked). A power-up after which the panel driver
+ *                    logs a failed initialisation (read from /dev/kmsg) is retried.
  */
 #include <errno.h>
 #include <fcntl.h>
@@ -112,6 +113,51 @@ static int blanked(int fd)
 }
 
 /*
+ * Powering the pipeline up occasionally fails to initialise the panel: the first DCS
+ * command of its init sequence times out ("vc4_dsi ...: transfer interrupt wait
+ * timeout", then the panel driver's "failed to init panel: -110"). The backlight then
+ * comes on over a panel that shows nothing, and stays so until the GUI blanks again
+ * (5.10 ignores the panel's prepare() result, so nothing else notices). Powering the
+ * pipeline down and up once more recovers it, so the kernel log is checked after each
+ * power-up. The power-up write is synchronous: the panel driver has logged a failure
+ * by the time it returns.
+ */
+#define PANEL_INIT_FAILED "failed to init panel"
+#define DPMS_UP_TRIES 6		/* attempts per power-up (~10-25 % fail; ~1.9 s each) */
+#define DPMS_RETRY_GAP_MS 500	/* powered down between attempts */
+
+static int kmsg_fd = -1;	/* /dev/kmsg, non-blocking; -1 = no check */
+
+/* start reading the kernel log from its current end */
+static void kmsg_skip(void)
+{
+	if (kmsg_fd >= 0)
+		lseek(kmsg_fd, 0, SEEK_END);
+}
+
+/* has the panel driver logged a failed initialisation since kmsg_skip()? */
+static int kmsg_panel_failed(void)
+{
+	char rec[8192];
+	int found = 0;
+
+	if (kmsg_fd < 0)
+		return 0;
+	for (;;) {
+		const ssize_t n = read(kmsg_fd, rec, sizeof(rec) - 1);
+
+		if (n < 0 && errno == EPIPE)
+			continue;	/* records overwritten while reading: go on */
+		if (n <= 0)
+			break;		/* EAGAIN: end of the log */
+		rec[n] = '\0';
+		if (strstr(rec, PANEL_INIT_FAILED))
+			found = 1;
+	}
+	return found;
+}
+
+/*
  * Power the display pipeline down (FB_BLANK_POWERDOWN) or up (FB_BLANK_UNBLANK)
  * through the framebuffer's sysfs "blank" file. Returns the new state: 1 = down.
  * Note that the kernel also writes the backlight's bl_power while doing this
@@ -121,11 +167,29 @@ static int dpms_set(int fd, int down, int cur)
 {
 	if (fd < 0 || down == cur)
 		return cur;
-	if (pwrite(fd, down ? "4" : "0", 1, 0) != 1) {
-		fprintf(stderr, "fbrotate: blank: %s\n", strerror(errno));
-		return cur;
+	for (int attempt = 1;; attempt++) {
+		if (!down)
+			kmsg_skip();
+		if (pwrite(fd, down ? "4" : "0", 1, 0) != 1) {
+			fprintf(stderr, "fbrotate: blank: %s\n", strerror(errno));
+			return cur;
+		}
+		if (down || !kmsg_panel_failed()) {
+			if (attempt > 1)
+				fprintf(stderr, "fbrotate: panel initialised on attempt %d\n", attempt);
+			return down;
+		}
+		if (attempt >= DPMS_UP_TRIES) {
+			/* left up: the next blank -> on cycle tries again */
+			fprintf(stderr, "fbrotate: panel initialisation failed %d times, giving up for now\n",
+				attempt);
+			return down;
+		}
+		fprintf(stderr, "fbrotate: panel initialisation failed, powering the display pipeline down and up again\n");
+		if (pwrite(fd, "4", 1, 0) != 1)
+			fprintf(stderr, "fbrotate: blank: %s\n", strerror(errno));
+		sleep_ms(DPMS_RETRY_GAP_MS);
 	}
-	return down;
 }
 
 int main(int argc, char **argv)
@@ -148,8 +212,11 @@ int main(int argc, char **argv)
 				blank_fd = open(argv[i + 1], O_RDONLY);
 			i++;
 		}
-		else if (!strcmp(argv[i], "--dpms") && i + 1 < argc)
+		else if (!strcmp(argv[i], "--dpms") && i + 1 < argc) {
 			dpms_fd = open(argv[++i], O_WRONLY);
+			/* see kmsg_panel_failed(); without it, no retries */
+			kmsg_fd = open("/dev/kmsg", O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+		}
 		else if (!strcmp(argv[i], "--dpms-delay") && i + 1 < argc)
 			dpms_delay_ms = atoi(argv[++i]) * 1000;
 		else
@@ -189,8 +256,9 @@ int main(int argc, char **argv)
 	       ccw ? "counter-clockwise" : "clockwise", interval_ms, idle_interval_ms,
 	       blank_fd >= 0 ? ", pauses while blanked" : "");
 	if (dpms_fd >= 0)
-		printf("fbrotate: powers the display pipeline down after %d s of blanking\n",
-		       dpms_delay_ms / 1000);
+		printf("fbrotate: powers the display pipeline down after %d s of blanking%s\n",
+		       dpms_delay_ms / 1000,
+		       kmsg_fd >= 0 ? ", retries failed panel initialisations" : "");
 	fflush(stdout);
 
 	/* first frame: copy everything */
