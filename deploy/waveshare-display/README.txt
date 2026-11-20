@@ -17,6 +17,9 @@ Files
   gui-v2.enabled                 optional: keep gui-v2 on the local display
   rotation                       optional: "ccw" turns the gui-v2 picture by 180 degrees
   no-landscape-fb                optional: let gui-v2 rotate itself (dialogs then close)
+  panel-poweroff                 optional: also power the DSI link and the panel down while
+                                 the display is blanked (content: seconds to wait, default 5;
+                                 saves 0.3-0.5 W; touch still wakes it)
 
 At every boot the script checks the kernel version, makes sure the overlays and
 config.txt lines are present, loads the modules from /data, waits for /dev/fb0

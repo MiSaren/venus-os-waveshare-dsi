@@ -148,13 +148,32 @@ if [ -d /service/gui-v2 ] && [ ! -f "$DIR/no-landscape-fb" ]; then
 			fbset -fb /dev/fb1 -g 1280 720 1280 720 16 &&
 			log "landscape framebuffer /dev/fb1 1280x720 ready"
 	fi
-	if [ -e /dev/fb1 ] && [ ! -d /service/fbrotate ]; then
-		mkdir -p /run/overlays/fbrotate
-		printf '#!/bin/sh\nexec 2>&1\nexec %s %s --blank %s /dev/fb1 /dev/fb0\n' \
-			"$DIR/fbrotate" "$rot_arg" "$BL/bl_power" > /run/overlays/fbrotate/run
-		chmod 755 /run/overlays/fbrotate/run
-		ln -s /run/overlays/fbrotate /service/fbrotate	# picked up by svscan
-		log "fbrotate service started"
+	if [ -e /dev/fb1 ]; then
+		# Optional $DIR/panel-poweroff (content: seconds, default 5): once the display
+		# has been blanked that long, fbrotate also powers the DSI link and the
+		# panel's own supplies down; the backlight alone leaves them running (0.3 W).
+		dpms_arg=
+		if [ -f "$DIR/panel-poweroff" ]; then
+			delay=$(cat "$DIR/panel-poweroff")
+			case "$delay" in '' | *[!0-9]*) delay=5 ;; esac
+			dpms_arg="--dpms /sys/class/graphics/fb0/blank --dpms-delay $delay"
+		fi
+		fbr=/run/overlays/fbrotate
+		mkdir -p $fbr
+		printf '#!/bin/sh\nexec 2>&1\nexec %s %s --blank %s %s /dev/fb1 /dev/fb0\n' \
+			"$DIR/fbrotate" "$rot_arg" "$BL/bl_power" "$dpms_arg" > $fbr/run.new
+		chmod 755 $fbr/run.new
+		if cmp -s $fbr/run.new $fbr/run; then
+			rm -f $fbr/run.new
+		else
+			mv $fbr/run.new $fbr/run
+			# run by hand with a changed option: restart the running service
+			[ -d /service/fbrotate ] && svc -t /service/fbrotate && log "fbrotate restarted with new options"
+		fi
+		if [ ! -d /service/fbrotate ]; then
+			ln -s $fbr /service/fbrotate	# picked up by svscan
+			log "fbrotate service started"
+		fi
 	fi
 	restart_gui_v2=0
 	if [ -e /dev/fb1 ] && ! grep -q 'fb=/dev/fb1' /service/gui-v2/run; then

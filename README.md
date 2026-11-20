@@ -195,6 +195,36 @@ and idle, 0 % with the screen off, and around 10 % while the UI animates.
 Create `/data/waveshare-display/no-landscape-fb` to disable this, so that gui-v2
 rotates itself again.
 
+### Panel power-off while the display is off (optional)
+
+When Venus blanks the display (the display-off timer), it only turns the backlight
+off (`bl_power`). The DSI link, the scanout and the panel's own supplies keep
+running, which costs 0.3 to 0.5 W on the Pi 4 (0.31 W in an A/B test, 0.53 W in a
+before/after comparison), measured at the battery next to 0.56 W for the backlight at
+brightness 52/255. With `fbrotate --dpms` the whole
+pipeline is powered down as well:
+
+- Create `/data/waveshare-display/panel-poweroff` (the content is the number of
+  seconds to wait after the blanking, default 5; run `waveshare-display.sh` by hand
+  or reboot to apply it). `fbrotate` then writes `4` to `/sys/class/graphics/fb0/blank`
+  (DPMS off: the panel's `unprepare` cuts IOVCC and AVDD and holds the LCD in reset)
+  and `0` as soon as `bl_power` reads `0` again, which the GUI writes on the first
+  touch. The touch controller stays powered and polled, so touch still wakes the
+  display; the picture comes back about half a second later than with the
+  backlight alone.
+- The panel driver must be the one from this repository: the 5.10 vc4 DSI
+  driver puts the lanes into ULPS before it calls `unprepare`, and the "display
+  off" / "sleep in" commands that the upstream `unprepare` sends then time out
+  intermittently (`vc4_dsi: transfer interrupt wait timeout`, 1 s, host reset).
+  They are not needed because the supplies are cut right after.
+- When `fbrotate` stops or is restarted while the panel is powered down, it powers the
+  panel up again and puts `bl_power` back to blanked, so the backlight does not stay on
+  for a GUI that believes the display is off. After a crash the next instance carries on
+  from the state it finds (`bl_power` non-zero means blanked; at start-up it also makes
+  sure the pipeline is up if `bl_power` reads 0).
+- Remove the file to go back to blanking with the backlight only (run
+  `waveshare-display.sh` by hand, or reboot).
+
 ### On-screen keyboard
 
 gui-v2 has two fixed layouts, 1024×600 and 800×480, and picks one from the
@@ -269,7 +299,7 @@ reboot.
 
 The full diffs are in `driver/patches/`.
 
-- **Panel.** `drm_panel.prepare_prev_first` does not exist in 5.10 and is not needed: 5.10 `vc4_dsi_encoder_enable()` powers up the DSI host before it calls the panel's `pre_enable`/`prepare`. `drm_panel_funcs.get_orientation` was added later and was removed here; the orientation is still set on the connector. `remove()` returns `int`.
+- **Panel.** `drm_panel.prepare_prev_first` does not exist in 5.10 and is not needed: 5.10 `vc4_dsi_encoder_enable()` powers up the DSI host before it calls the panel's `pre_enable`/`prepare`. `drm_panel_funcs.get_orientation` was added later and was removed here; the orientation is still set on the connector. `remove()` returns `int`. `unprepare()` does not send the DCS "display off" and "sleep in" commands (see the power-off section: they time out, because 5.10 `vc4_dsi_encoder_disable()` has already put the lanes into ULPS).
 - **Panel MCU.** It uses `.probe_new`, `remove()` returns `int`, and `gpio_chip.set` returns `void`.
 - **goodix.** Polling mode via `input_setup_polling()` every 17 ms when there is no IRQ, and no IRQ calls in that case.
 - **Overlay.** The `dsi0` parameter was removed. It refers to `i2c_csi_dsi0`, which the 5.10 device tree does not have, and an unresolved fixup makes the firmware drop the whole overlay.

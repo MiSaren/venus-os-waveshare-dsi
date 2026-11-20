@@ -13,7 +13,7 @@
  * second without changes, and paused while the backlight is off.
  *
  * usage: fbrotate [--ccw] [--interval ms] [--idle-interval ms] [--blank file]
- *                 <src-fb> <dst-fb>
+ *                 [--dpms file] [--dpms-delay s] <src-fb> <dst-fb>
  *   --ccw            rotate counter-clockwise; the default is clockwise: the top
  *                    of the source ends up at the right-hand edge of the
  *                    destination (as gui-v1 and gui-v2 rotate themselves)
@@ -21,6 +21,14 @@
  *   --idle-interval  poll interval after 1 s without changes (default 100 ms)
  *   --blank          file that reads "0" while the display is on, e.g.
  *                    /sys/class/backlight/<dev>/bl_power; polling pauses otherwise
+ *   --dpms           the destination's sysfs "blank" file, e.g.
+ *                    /sys/class/graphics/fb0/blank. Needs --blank. When the display
+ *                    has been blanked for --dpms-delay seconds (default 5), the
+ *                    whole display pipeline is powered down through it (DSI link,
+ *                    scanout and the panel's own supplies, not only its
+ *                    backlight); it is powered up again when the display is on,
+ *                    and when fbrotate exits (with the backlight left off if the
+ *                    display was blanked).
  */
 #include <errno.h>
 #include <fcntl.h>
@@ -103,10 +111,28 @@ static int blanked(int fd)
 	return fd >= 0 && pread(fd, &c, 1, 0) == 1 && c != '0';
 }
 
+/*
+ * Power the display pipeline down (FB_BLANK_POWERDOWN) or up (FB_BLANK_UNBLANK)
+ * through the framebuffer's sysfs "blank" file. Returns the new state: 1 = down.
+ * Note that the kernel also writes the backlight's bl_power while doing this
+ * (non-zero when powering down, 0 when powering up).
+ */
+static int dpms_set(int fd, int down, int cur)
+{
+	if (fd < 0 || down == cur)
+		return cur;
+	if (pwrite(fd, down ? "4" : "0", 1, 0) != 1) {
+		fprintf(stderr, "fbrotate: blank: %s\n", strerror(errno));
+		return cur;
+	}
+	return down;
+}
+
 int main(int argc, char **argv)
 {
 	struct fb src, dst;
-	int ccw = 0, interval_ms = 33, idle_interval_ms = 100, blank_fd = -1, i = 1;
+	int ccw = 0, interval_ms = 33, idle_interval_ms = 100, blank_fd = -1, dpms_fd = -1;
+	int dpms_delay_ms = 5000, i = 1;
 
 	for (; i < argc && argv[i][0] == '-'; i++) {
 		if (!strcmp(argv[i], "--ccw"))
@@ -115,14 +141,27 @@ int main(int argc, char **argv)
 			interval_ms = atoi(argv[++i]);
 		else if (!strcmp(argv[i], "--idle-interval") && i + 1 < argc)
 			idle_interval_ms = atoi(argv[++i]);
-		else if (!strcmp(argv[i], "--blank") && i + 1 < argc)
-			blank_fd = open(argv[++i], O_RDONLY);
+		else if (!strcmp(argv[i], "--blank") && i + 1 < argc) {
+			/* writable if possible: see the exit path */
+			blank_fd = open(argv[i + 1], O_RDWR);
+			if (blank_fd < 0)
+				blank_fd = open(argv[i + 1], O_RDONLY);
+			i++;
+		}
+		else if (!strcmp(argv[i], "--dpms") && i + 1 < argc)
+			dpms_fd = open(argv[++i], O_WRONLY);
+		else if (!strcmp(argv[i], "--dpms-delay") && i + 1 < argc)
+			dpms_delay_ms = atoi(argv[++i]) * 1000;
 		else
 			break;
 	}
-	if (argc - i != 2 || interval_ms <= 0 || idle_interval_ms <= 0) {
-		fprintf(stderr, "usage: %s [--ccw] [--interval ms] [--idle-interval ms] [--blank file] <src-fb> <dst-fb>\n",
-			argv[0]);
+	if (argc - i != 2 || interval_ms <= 0 || idle_interval_ms <= 0 || dpms_delay_ms < 0) {
+		fprintf(stderr, "usage: %s [--ccw] [--interval ms] [--idle-interval ms] [--blank file] "
+			"[--dpms file] [--dpms-delay s] <src-fb> <dst-fb>\n", argv[0]);
+		return 2;
+	}
+	if (dpms_fd >= 0 && blank_fd < 0) {
+		fprintf(stderr, "fbrotate: --dpms needs --blank\n");
 		return 2;
 	}
 	if (fb_open(&src, argv[i], 0) || fb_open(&dst, argv[i + 1], 1))
@@ -149,6 +188,9 @@ int main(int argc, char **argv)
 	       src.path, src.var.xres, h, dst.path, dst.var.xres, dst.var.yres, bpp,
 	       ccw ? "counter-clockwise" : "clockwise", interval_ms, idle_interval_ms,
 	       blank_fd >= 0 ? ", pauses while blanked" : "");
+	if (dpms_fd >= 0)
+		printf("fbrotate: powers the display pipeline down after %d s of blanking\n",
+		       dpms_delay_ms / 1000);
 	fflush(stdout);
 
 	/* first frame: copy everything */
@@ -156,13 +198,34 @@ int main(int argc, char **argv)
 		memcpy(shadow + y * row, src.mem + (size_t)y * src.fix.line_length, row);
 	rotate_band(&src, &dst, 0, h, ccw);
 
-	int idle_ms = 0;
+	int idle_ms = 0, blank_ms = 0, was_blank = 0, dpms_down = 0;
+
+	/*
+	 * The display should be on when bl_power reads 0. A previous instance may have died
+	 * between the GUI's wake-up write and its own unblank, which would leave the panel
+	 * powered down for a GUI that believes it is on: make sure the pipeline is up.
+	 */
+	if (dpms_fd >= 0 && !blanked(blank_fd))
+		dpms_set(dpms_fd, 0, 1);
+
 	while (!stop) {
 		if (blanked(blank_fd)) {
-			sleep_ms(250);
+			const int nap = dpms_down ? 100 : 250;	/* quick wake-up once powered down */
+			if (dpms_fd >= 0 && !dpms_down && blank_ms >= dpms_delay_ms)
+				dpms_down = dpms_set(dpms_fd, 1, dpms_down);
+			sleep_ms(nap);
+			blank_ms += nap;
+			was_blank = 1;
 			idle_ms = 0;	/* catch up quickly once the display is back on */
 			continue;
 		}
+		if (was_blank) {
+			/* Unblank on every blank -> on transition, not only when this instance powered the
+			 * pipeline down: a previous instance may have died while it was down. */
+			dpms_down = dpms_set(dpms_fd, 0, 1);
+			was_blank = 0;
+		}
+		blank_ms = 0;
 		const int wait = idle_ms >= 1000 ? idle_interval_ms : interval_ms;
 		sleep_ms(wait);
 		int any = 0;
@@ -182,6 +245,20 @@ int main(int argc, char **argv)
 			}
 		}
 		idle_ms = any ? 0 : (idle_ms < 1000 ? idle_ms + wait : idle_ms);
+	}
+	if (dpms_down) {
+		/*
+		 * Never leave the panel powered down behind us. Powering it up makes the kernel
+		 * switch the backlight on as well (bl_power -> 0). If the GUI still wants the
+		 * display blanked (it only writes bl_power when its timer fires or a touch
+		 * wakes it), give that back, or the display would stay lit with a GUI that
+		 * believes it is off.
+		 */
+		const int still_blank = blanked(blank_fd);
+
+		dpms_set(dpms_fd, 0, 1);
+		if (still_blank && pwrite(blank_fd, "1", 1, 0) != 1)
+			fprintf(stderr, "fbrotate: bl_power: %s\n", strerror(errno));
 	}
 	return 0;
 }

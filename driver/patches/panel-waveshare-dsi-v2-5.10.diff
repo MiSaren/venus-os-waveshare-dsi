@@ -19,7 +19,24 @@
  
  #include <linux/gpio/consumer.h>
  #include <linux/regulator/consumer.h>
-@@ -2268,19 +2274,10 @@
+@@ -1954,8 +1960,14 @@
+ {
+ 	struct ws_panel *ctx = panel_to_ws(panel);
+ 
+-	mipi_dsi_dcs_set_display_off(ctx->dsi);
+-	mipi_dsi_dcs_enter_sleep_mode(ctx->dsi);
++	/*
++	 * 5.10 backport: no "display off" / "sleep in" DCS commands here. The 5.10
++	 * vc4_dsi_encoder_disable() puts the DSI lanes into ULPS before it calls
++	 * post_disable (= this function), so the commands sometimes time out
++	 * ("transfer interrupt wait timeout", 1 s, host reset). The supplies are
++	 * cut right below anyway, and prepare() resets and re-initialises the
++	 * panel completely.
++	 */
+ 
+ 	if (ctx->reset) {
+ 		gpiod_set_value_cansleep(ctx->reset, 0);
+@@ -2268,19 +2280,10 @@
  	return 1;
  }
  
@@ -39,7 +56,7 @@
  };
  
  static int ws_panel_dsi_probe(struct mipi_dsi_device *dsi)
-@@ -2298,7 +2295,7 @@
+@@ -2298,7 +2301,7 @@
  	ctx->dsi = dsi;
  	ctx->desc = of_device_get_match_data(&dsi->dev);
  
@@ -48,7 +65,7 @@
  	drm_panel_init(&ctx->panel, &dsi->dev, &ws_panel_funcs,
  		       DRM_MODE_CONNECTOR_DSI);
  
-@@ -2342,7 +2339,8 @@
+@@ -2342,7 +2345,8 @@
  	return ret;
  }
  
@@ -58,7 +75,7 @@
  {
  	struct ws_panel *ctx = mipi_dsi_get_drvdata(dsi);
  
-@@ -2362,6 +2360,8 @@
+@@ -2362,6 +2366,8 @@
  		gpiod_set_value_cansleep(ctx->iovcc, 0);
  		msleep(20);
  	}

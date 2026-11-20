@@ -1960,8 +1960,14 @@ static int ws_panel_unprepare(struct drm_panel *panel)
 {
 	struct ws_panel *ctx = panel_to_ws(panel);
 
-	mipi_dsi_dcs_set_display_off(ctx->dsi);
-	mipi_dsi_dcs_enter_sleep_mode(ctx->dsi);
+	/*
+	 * 5.10 backport: no "display off" / "sleep in" DCS commands here. The 5.10
+	 * vc4_dsi_encoder_disable() puts the DSI lanes into ULPS before it calls
+	 * post_disable (= this function), so the commands sometimes time out
+	 * ("transfer interrupt wait timeout", 1 s, host reset). The supplies are
+	 * cut right below anyway, and prepare() resets and re-initialises the
+	 * panel completely.
+	 */
 
 	if (ctx->reset) {
 		gpiod_set_value_cansleep(ctx->reset, 0);
