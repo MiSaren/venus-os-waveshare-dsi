@@ -191,8 +191,12 @@ if [ -d /service/gui-v2 ] && [ ! -f "$DIR/no-landscape-fb" ]; then
 	# copies (gui-v2-qml.patch) and bind-mount them over the installed files.
 	qml=/opt/victronenergy/gui-v2/Victron/VenusOS
 	fix=/run/overlays/gui-v2-qml
-	if [ -e /dev/fb1 ] && [ -f "$DIR/gui-v2-qml.patch" ] && [ -d "$qml" ] && ! grep -q " $qml/" /proc/mounts; then
-		files=$(sed -n 's|^+++ b/\([^[:space:]]*\).*|\1|p' "$DIR/gui-v2-qml.patch")
+	files=$(sed -n 's|^+++ b/\([^[:space:]]*\).*|\1|p' "$DIR/gui-v2-qml.patch" 2> /dev/null)
+	patched() {	# any of our files already bind-mounted (other tools may patch other files)
+		for f in $files; do grep -q " $qml/$f " /proc/mounts && return 0; done
+		return 1
+	}
+	if [ -e /dev/fb1 ] && [ -n "$files" ] && [ -d "$qml" ] && ! patched; then
 		rm -rf "$fix"
 		ok=1
 		for f in $files; do
