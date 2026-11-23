@@ -54,12 +54,15 @@ What is untested:
 | `driver/goodix.c` | Venus' own 5.10 Goodix driver plus the polling mode from `rpi-6.18.y` |
 | `driver/dts/` | `vc4-kms-dsi-waveshare-panel-v2` overlay for the 5.10 device tree |
 | `driver/patches/` | Diffs of all changes against the upstream sources |
+| `driver/Makefile`, `driver/Kbuild` | Build of the modules, overlays and `fbrotate`; `make dist` makes the release package |
 | `scripts/prepare-kernel.sh` | Builds a kernel tree identical to the Venus kernel (source, patches, config, `Module.symvers`) |
 | `deploy/install.sh`, `deploy/uninstall.sh` | Installer and uninstaller that run on the GX device |
 | `deploy/waveshare-display/waveshare-display.sh` | Boot script, run from `/data/rcS.local` |
 | `deploy/waveshare-display/gui-v2-keep.sh` | Optional: installs gui-v2 again after firmware updates |
 | `deploy/waveshare-display/gui-v2-qml.patch` | gui-v2 QML fix: puts the on-screen keyboard at the bottom of the UI on the 1280×720 screen |
 | `fbrotate/fbrotate.c` | Copies a 1280×720 virtual framebuffer onto the 720×1280 panel, rotated (used with gui-v2) |
+| `deploy/waveshare-display/README.txt` | Short file reference that goes into the release package |
+| `docs/img/` | Screenshots for this README |
 
 ## Installation
 
@@ -188,7 +191,7 @@ This setup does that in software:
 - `vfb` provides a 1280×720 RGB565 framebuffer, `/dev/fb1`. gui-v2 draws there (`QT_QPA_PLATFORM=linuxfb:fb=/dev/fb1`), sees a landscape screen and does not rotate. Dialogs work.
 - `fbrotate` compares `/dev/fb1` with a shadow copy in bands of 16 rows and copies only changed bands onto the panel (`/dev/fb0`), rotated by 90°. It polls every 33 ms while the screen changes and every 100 ms after 1 s without changes, and pauses while the backlight is off.
 - Qt rotates the touch coordinates with `QT_QPA_EVDEV_TOUCHSCREEN_PARAMETERS=rotate=270`.
-- The script only changes the gui-v2 service file in `/service`, which is a ramdisk.
+- The script only changes the gui-v2 service file in `/service`, which is a ramdisk. The only other change to gui-v2 is the bind mounts of the patched QML copies (see [On-screen keyboard](#on-screen-keyboard)).
 
 Measured on the Pi 4: `fbrotate` uses about 2 % of one core with the screen on
 and idle, 0 % with the screen off, and around 10 % while the UI animates.
