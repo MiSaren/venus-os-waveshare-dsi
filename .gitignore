@@ -15,3 +15,4 @@
 # local notes, device logs (contain MAC/IP addresses)
 /private/
 /fbrotate/fbrotate
+/private_refs/
